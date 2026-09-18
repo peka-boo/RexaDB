@@ -319,6 +319,42 @@ export const workflowRuns = sqliteTable("workflow_runs", {
 export type WorkflowRow = typeof workflows.$inferSelect;
 export type WorkflowRunRow = typeof workflowRuns.$inferSelect;
 
+/**
+ * Entity Explorer — virtual (business-convention) relations, stored locally per
+ * connection string (matching the schema-cache keying convention). These are
+ * metadata only and never generate DDL against the target database.
+ */
+export const virtualRelations = sqliteTable("virtual_relations", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  connectionString: text("connection_string").notNull(),
+  sourceSchema: text("source_schema").notNull(),
+  sourceTable: text("source_table").notNull(),
+  sourceColumns: text("source_columns").notNull(), // JSON array; v1 UI writes single-element arrays
+  targetSchema: text("target_schema").notNull(),
+  targetTable: text("target_table").notNull(),
+  targetColumns: text("target_columns").notNull(), // JSON array
+  origin: text("origin").$type<"manual" | "inferred">().notNull().default("manual"),
+  label: text("label"),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+});
+
+/**
+ * Entity Explorer — curated searchable columns for global entity search.
+ * Keyed by connection string; rows replace the auto-picked default set.
+ */
+export const searchableColumns = sqliteTable("searchable_columns", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  connectionString: text("connection_string").notNull(),
+  schemaName: text("schema_name").notNull(),
+  tableName: text("table_name").notNull(),
+  columnName: text("column_name").notNull(),
+  enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+});
+
+export type VirtualRelationRow = typeof virtualRelations.$inferSelect;
+export type SearchableColumnRow = typeof searchableColumns.$inferSelect;
+
 // Relations power better-drizzle's `include` / nested `where` filters
 // (e.g. `where: { connection: { is: { name } } }`). No DB migration needed.
 export const connectionsRelations = relations(connections, ({ many, one }) => ({
