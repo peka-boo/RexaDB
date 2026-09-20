@@ -200,11 +200,12 @@ function copyAuthHeaders(
 }
 
 // Supabase Management API proxy (avoids CORS in the browser)
-app.all("/api/supabase-mgmt/proxy/*", async (req, res) => {
+app.use("/api/supabase-mgmt/proxy", async (req: any, res) => {
   try {
-    const targetPath = (req.params as any)[0];
-    const qs = buildProxyQueryString(req.query as Record<string, unknown>);
-    const targetUrl = `https://api.supabase.com/${targetPath}${qs}`;
+    const targetPath = req.path;
+    const qs = Object.keys(req.query).length
+      ? "?" + new URLSearchParams(req.query as Record<string, string>).toString()
+      : "";    const targetUrl = `https://api.supabase.com/${targetPath}${qs}`;
     const headers: Record<string, string> = {
       "User-Agent": "supabase-cli",
     };
@@ -283,11 +284,12 @@ app.post("/api/transfer/export", async (req, res) => {
 // PlanetScale API proxy (avoids CORS in the browser). Used for browsing
 // orgs/databases/branches and minting branch passwords — never for query
 // execution, which talks to the resulting mysql/postgres connection directly.
-app.all("/api/planetscale/proxy/*", async (req, res) => {
+app.use("/api/planetscale/proxy", async (req: any, res) => {
   try {
-    const targetPath = (req.params as any)[0];
-    const qs = buildProxyQueryString(req.query as Record<string, unknown>);
-    const targetUrl = `https://api.planetscale.com/${targetPath}${qs}`;
+    const targetPath = req.path;
+    const qs = Object.keys(req.query).length
+      ? "?" + new URLSearchParams(req.query as Record<string, string>).toString()
+      : "";    const targetUrl = `https://api.planetscale.com/${targetPath}${qs}`;
     const headers: Record<string, string> = {
       Accept: "application/json",
     };
@@ -323,9 +325,9 @@ app.all("/api/planetscale/proxy/*", async (req, res) => {
 // webview can't because of CORS. The target host comes from ?host= — the
 // login flow targets spacetimedb.com, while database listing targets the
 // cloud host (customizable like `spacetime server add` in the CLI).
-app.all("/api/spacetimedb-mgmt/proxy/*", async (req, res) => {
+app.use("/api/spacetimedb-mgmt/proxy", async (req: any, res) => {
   try {
-    const targetPath = (req.params as any)[0];
+    const targetPath = req.path;
     const host = String(req.query.host || "spacetimedb.com");
     // Cloud/maincloud hosts speak TLS; loopback/self-hosted servers usually
     // speak plain HTTP. Let an explicit http:// prefix win, then sniff.
