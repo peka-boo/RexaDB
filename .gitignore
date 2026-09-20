@@ -110,6 +110,11 @@ skills-lock.json
 # Supabase local config & credentials
 /supabase/
 
+# Local runtime data
+server/chats/
+server/keybindings.json
+.DS_Store
+
 # Local-only notes / transcripts (never commit)
 /TRANSFER_FIXES.md
 /chat.md
