@@ -24,6 +24,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
   AlertTriangle,
+  ArrowLeftRight,
   BadgeCheck,
   Database,
   Loader2,
@@ -162,30 +163,53 @@ function RelationEditor({
   const [state, setState] = useState<EditorState>(initial);
   const [saving, setSaving] = useState(false);
 
-  const save = async () => {
+  const save = async (bidirectional = false) => {
     if (!state.sourceTable || !state.sourceColumn || !state.targetTable || !state.targetColumn) {
       toast.error("Pick source and target table + column");
       return;
     }
     setSaving(true);
     try {
-      const res = await upsertVirtualRelation(connectionString, {
+      const base = {
+        sourceColumns: [state.sourceColumn],
+        targetColumns: [state.targetColumn],
+        origin: "manual" as const,
+        label: state.label.trim() || null,
+      };
+      // Forward: source → target. Bidirectional adds the mirrored row
+      // (target → source) so navigation/joins work from both sides.
+      const forward = {
+        ...base,
         sourceSchema: state.sourceSchema,
         sourceTable: state.sourceTable,
-        sourceColumns: [state.sourceColumn],
         targetSchema: state.targetSchema,
         targetTable: state.targetTable,
-        targetColumns: [state.targetColumn],
-        origin: "manual",
-        label: state.label.trim() || null,
-      });
-      if (res.success) {
-        toast.success("Virtual relation saved (local metadata only)");
-        onSaved();
-        onClose();
-      } else {
+      };
+      const res = await upsertVirtualRelation(connectionString, forward);
+      if (!res.success) {
         toast.error(res.error || "Failed to save");
+        return;
       }
+      if (bidirectional) {
+        const reverse = await upsertVirtualRelation(connectionString, {
+          ...base,
+          sourceSchema: state.targetSchema,
+          sourceTable: state.targetTable,
+          targetSchema: state.sourceSchema,
+          targetTable: state.sourceTable,
+        });
+        if (!reverse.success) {
+          toast.error(reverse.error || "Saved forward relation, but the mirrored one failed");
+          return;
+        }
+      }
+      toast.success(
+        bidirectional
+          ? "Virtual relation saved both ways (2 local rows, no DDL)"
+          : "Virtual relation saved (local metadata only)",
+      );
+      onSaved();
+      onClose();
     } finally {
       setSaving(false);
     }
@@ -222,9 +246,13 @@ function RelationEditor({
           onChange={(e) => setState((s) => ({ ...s, label: e.target.value }))}
         />
         <div className="flex gap-1.5 pb-0.5">
-          <Button size="sm" variant="default" disabled={saving} onClick={save}>
+          <Button size="sm" variant="default" disabled={saving} onClick={() => void save()} title="Create one relation: source → target">
             {saving ? <Loader2 className="size-3.5 animate-spin" /> : <BadgeCheck className="size-3.5" />}
             Save
+          </Button>
+          <Button size="sm" variant="default" disabled={saving} onClick={() => void save(true)} title="Create two mirrored relations: source → target AND target → source">
+            <ArrowLeftRight className="size-3.5" />
+            Save ⇄
           </Button>
           <Button size="sm" variant="ghost" onClick={onClose}>
             <X className="size-3.5" />
