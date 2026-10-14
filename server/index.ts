@@ -1019,43 +1019,43 @@ app.post("/api/tables/search-all", async (req, res) => {
 });
 
 // Search index routes (local SQLite cache for universal search)
-app.post("/api/search-index/query", dynamicPostRoute("../lib/db/search-index-actions", (body, m) => m.searchLocalIndex(body.connectionString, body.term)));
+app.post("/api/search-index/query", dynamicPostRoute(() => import("../lib/db/search-index-actions"), (body, m) => m.searchLocalIndex(body.connectionString, body.term)));
 
-app.post("/api/search-index/save", dynamicPostRoute("../lib/db/search-index-actions", (body, m) => m.saveSearchResultsToIndex(body.connectionString, body.results)));
+app.post("/api/search-index/save", dynamicPostRoute(() => import("../lib/db/search-index-actions"), (body, m) => m.saveSearchResultsToIndex(body.connectionString, body.results)));
 
-app.post("/api/search-index/clear", dynamicPostRoute("../lib/db/search-index-actions", (body, m) => m.clearSearchIndex(body.connectionString)));
+app.post("/api/search-index/clear", dynamicPostRoute(() => import("../lib/db/search-index-actions"), (body, m) => m.clearSearchIndex(body.connectionString)));
 
-app.post("/api/search-index/status", dynamicPostRoute("../lib/db/search-index-actions", (body, m) => m.getSearchIndexStatus(body.connectionString)));
+app.post("/api/search-index/status", dynamicPostRoute(() => import("../lib/db/search-index-actions"), (body, m) => m.getSearchIndexStatus(body.connectionString)));
 
 // Entity Explorer — relationship union layer + virtual relations (local metadata only, never DDL)
-app.post("/api/relations/list", dynamicPostRoute("../lib/db/relations", async (body, m) => ({ success: true, data: await m.getMergedRelations(body.connectionString) })));
+app.post("/api/relations/list", dynamicPostRoute(() => import("../lib/db/relations"), async (body, m) => ({ success: true, data: await m.getMergedRelations(body.connectionString) })));
 
-app.post("/api/relations/upsert", dynamicPostRoute("../lib/db/relations", (body, m) => m.upsertVirtualRelation(body.connectionString, body.relation)));
+app.post("/api/relations/upsert", dynamicPostRoute(() => import("../lib/db/relations"), (body, m) => m.upsertVirtualRelation(body.connectionString, body.relation)));
 
-app.post("/api/relations/delete", dynamicPostRoute("../lib/db/relations", (body, m) => m.deleteVirtualRelation(body.connectionString, body.id)));
+app.post("/api/relations/delete", dynamicPostRoute(() => import("../lib/db/relations"), (body, m) => m.deleteVirtualRelation(body.connectionString, body.id)));
 
-app.post("/api/relations/suggest", dynamicPostRoute("../lib/db/relations", (body, m) => m.suggestRelations(body.connectionString)));
+app.post("/api/relations/suggest", dynamicPostRoute(() => import("../lib/db/relations"), (body, m) => m.suggestRelations(body.connectionString)));
 
-app.post("/api/relations/verify", dynamicPostRoute("../lib/db/relations", (body, m) => m.verifyRelation(body.connectionString, body.relation)));
+app.post("/api/relations/verify", dynamicPostRoute(() => import("../lib/db/relations"), (body, m) => m.verifyRelation(body.connectionString, body.relation)));
 
 // Base export / import — one JSON file bundling a connection workspace
 // (credentials, settings, dashboards, tabs, relations, …).
-app.post("/api/base/export", dynamicPostRoute("../lib/db/base-bundle", (body, m) => m.exportBase(body.connectionId)));
+app.post("/api/base/export", dynamicPostRoute(() => import("../lib/db/base-bundle"), (body, m) => m.exportBase(body.connectionId)));
 
-app.post("/api/base/import", dynamicPostRoute("../lib/db/base-bundle", (body, m) => m.importBase(body.bundle ?? body)));
+app.post("/api/base/import", dynamicPostRoute(() => import("../lib/db/base-bundle"), (body, m) => m.importBase(body.bundle ?? body)));
 
 // Entity Explorer — entity search / overview / related rows
-app.post("/api/entity/search", dynamicPostRoute("../lib/db/entity-explorer-actions", (body, m) => m.searchEntities(body.connectionString, body.term, { schema: body.schema, table: body.table })));
+app.post("/api/entity/search", dynamicPostRoute(() => import("../lib/db/entity-explorer-actions"), (body, m) => m.searchEntities(body.connectionString, body.term, { schema: body.schema, table: body.table })));
 
-app.post("/api/entity/overview", dynamicPostRoute("../lib/db/entity-explorer-actions", (body, m) => m.getEntityOverview(body.connectionString, body.schema, body.table, body.pkValues)));
+app.post("/api/entity/overview", dynamicPostRoute(() => import("../lib/db/entity-explorer-actions"), (body, m) => m.getEntityOverview(body.connectionString, body.schema, body.table, body.pkValues)));
 
-app.post("/api/entity/related-rows", dynamicPostRoute("../lib/db/entity-explorer-actions", (body, m) => m.getRelatedRows(body.connectionString, body.schema, body.table, body.pkValues, body.target, body.offset)));
+app.post("/api/entity/related-rows", dynamicPostRoute(() => import("../lib/db/entity-explorer-actions"), (body, m) => m.getRelatedRows(body.connectionString, body.schema, body.table, body.pkValues, body.target, body.offset)));
 
-app.post("/api/entity/searchable-columns", dynamicPostRoute("../lib/db/entity-explorer-actions", (body, m) => m.getSearchableColumnConfig(body.connectionString)));
+app.post("/api/entity/searchable-columns", dynamicPostRoute(() => import("../lib/db/entity-explorer-actions"), (body, m) => m.getSearchableColumnConfig(body.connectionString)));
 
-app.post("/api/entity/searchable-columns/effective", dynamicPostRoute("../lib/db/entity-explorer-actions", async (body, m) => ({ success: true, data: await m.computeSearchableColumns(body.connectionString) })));
+app.post("/api/entity/searchable-columns/effective", dynamicPostRoute(() => import("../lib/db/entity-explorer-actions"), async (body, m) => ({ success: true, data: await m.computeSearchableColumns(body.connectionString) })));
 
-app.post("/api/entity/searchable-columns/save", dynamicPostRoute("../lib/db/entity-explorer-actions", (body, m) => m.saveSearchableColumnConfig(body.connectionString, body.entries)));
+app.post("/api/entity/searchable-columns/save", dynamicPostRoute(() => import("../lib/db/entity-explorer-actions"), (body, m) => m.saveSearchableColumnConfig(body.connectionString, body.entries)));
 
 app.post("/api/table-structure", proxyThreeArgRoute(mod.fetchTableStructure));
 
@@ -1982,10 +1982,18 @@ function simplePostRoute(fn: (body: any) => Promise<any>): Handler {
 }
 
 /** POST /api/X — dynamic import, then call fn(body, importedModule) */
-function dynamicPostRoute(importPath: string, fn: (body: any, mod: any) => Promise<any>): Handler {
+/**
+ * Wrap a POST route around a lazily-imported module.
+ *
+ * IMPORTANT: `load` must be `() => import("literal-path")` — a literal
+ * string dynamic import. `bun build --compile` statically traces those and
+ * embeds the module in the binary; a variable import(`path`) would be
+ * missing from the packaged binary at runtime.
+ */
+function dynamicPostRoute(load: () => Promise<any>, fn: (body: any, mod: any) => Promise<any>): Handler {
   return async (req, res) => {
     try {
-      const m = await import(importPath);
+      const m = await load();
       res.json(await fn(req.body, m));
     } catch (e: any) { res.json({ success: false, error: e.message }); }
   };
