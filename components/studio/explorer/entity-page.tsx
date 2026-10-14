@@ -21,6 +21,8 @@ import {
   ChevronRight,
   Copy,
   Check,
+  CircleHelp,
+  ClipboardList,
   Database,
   KeyRound,
   Link2,
@@ -177,6 +179,52 @@ function relationName(r: ExplorerRelation): string {
   return `${r.source.schema}.${r.source.table}.${r.source.column} → ${r.target.schema}.${r.target.table}.${r.target.column}`;
 }
 
+// ─── Source-SQL helpers ─────────────────────────────────────────────────
+
+/** Small "?" affordance: opens a dialog with the SQL behind a data block. */
+function SqlHintButton({ title, onClick }: { title: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      className="inline-flex size-5 shrink-0 items-center justify-center rounded-full text-muted-foreground/70 transition-colors hover:bg-muted hover:text-foreground"
+      title={title}
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick();
+      }}
+    >
+      <CircleHelp className="size-3.5" />
+    </button>
+  );
+}
+
+/** Build the grouped, copy-paste-runnable SQL text for the whole entity page. */
+function buildAllSql(overview: OverviewWithPk): string {
+  const pkDesc = overview.pkColumns.map((c) => `${c}=${formatValue(overview.row?.[c])}`).join(" ");
+  const out: string[] = [
+    `-- RexaDB Entity: ${overview.schema}.${overview.table}${pkDesc ? `  (${pkDesc})` : ""}`,
+    "",
+    `-- [本数据] ${overview.schema}.${overview.table}`,
+    overview.rowSql || "-- (row query unavailable)",
+  ];
+  for (const out2 of overview.outgoing) {
+    out.push(
+      "",
+      `-- [上游] ${out2.relation.target.schema}.${out2.relation.target.table} via ${out2.relation.source.column}`,
+      out2.sql || "-- (parent query unavailable)",
+    );
+  }
+  overview.incoming.forEach((inc, i) => {
+    out.push(
+      "",
+      `-- [下游 ${i + 1}/${overview.incoming.length}] ${inc.relation.source.schema}.${inc.relation.source.table} via ${inc.relation.source.column}`,
+      inc.sql?.count || "-- (count query unavailable)",
+      inc.sql?.rows || "-- (rows query unavailable)",
+    );
+  });
+  return out.join("\n");
+}
+
 // ─── Related rows accordion section ─────────────────────────────────────
 
 // The overview response does not carry the pkValues snapshot; attach it on
@@ -190,9 +238,10 @@ type RelatedSectionProps = {
   sectionIndex: number;
   onDrill: (ref: EntityRef) => void;
   onViewValue?: (column: string, type: string | null, value: unknown) => void;
+  onShowSql?: (title: string, sql: string) => void;
 };
 
-function RelatedSection({ connectionString, overview, sectionIndex, onDrill, onViewValue }: RelatedSectionProps) {
+function RelatedSection({ connectionString, overview, sectionIndex, onDrill, onViewValue, onShowSql }: RelatedSectionProps) {
   const section = overview.incoming[sectionIndex];
   const [open, setOpen] = useState(false);
   const [rows, setRows] = useState<Record<string, unknown>[]>([]);
@@ -201,6 +250,9 @@ function RelatedSection({ connectionString, overview, sectionIndex, onDrill, onV
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
+  // Live SQL from the last fetch — reflects the CURRENT pagination offset;
+  // falls back to the overview-provided text for never-expanded sections.
+  const [liveSql, setLiveSql] = useState<{ rows: string; count: string } | null>(null);
 
   const childPkColumns = useMemo(() => columns.filter((c) => c.isPrimary).map((c) => c.name), [columns]);
   const pkSnapshot = overview.pkValuesSnapshot;
@@ -226,6 +278,7 @@ function RelatedSection({ connectionString, overview, sectionIndex, onDrill, onV
         setRows((prev) => (replace ? res.data!.rows : [...prev, ...res.data!.rows]));
         setColumns(res.data.columns);
         setTotal(res.data.total);
+        if (res.data.sql && res.data.sql.rows) setLiveSql(res.data.sql);
         setHasMore(res.data.rows.length >= 100 && (res.data.total === null || offset + res.data.rows.length < res.data.total));
       } else {
         setError(res.error || "Failed to load rows");
@@ -268,6 +321,19 @@ function RelatedSection({ connectionString, overview, sectionIndex, onDrill, onV
             {countLabel(section.count, isEstimate ? null : section.tableEstimate)}
             {isEstimate ? " est." : ""}
           </span>
+          {onShowSql && (
+            <SqlHintButton
+              title="View the SQL behind this section"
+              onClick={() => {
+                const sql = liveSql ?? section.sql;
+                if (!sql) return;
+                onShowSql(
+                  `${section.relation.source.schema}.${section.relation.source.table} (via ${section.relation.source.column})`,
+                  `${sql.count};\n\n${sql.rows};`,
+                );
+              }}
+            />
+          )}
         </span>
       </button>
 
@@ -376,6 +442,18 @@ export function EntityPage({ connectionString, entity, onDrill }: EntityPageProp
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [valueDetail, setValueDetail] = useState<{ column: string; type: string | null; value: unknown } | null>(null);
+  const [sqlDetail, setSqlDetail] = useState<{ title: string; sql: string } | null>(null);
+  const [copiedAll, setCopiedAll] = useState(false);
+
+  const showSql = useCallback((title: string, sql: string) => setSqlDetail({ title, sql }), []);
+
+  const copyAllSql = useCallback(() => {
+    if (!overview) return;
+    void navigator.clipboard.writeText(buildAllSql(overview)).then(() => {
+      setCopiedAll(true);
+      window.setTimeout(() => setCopiedAll(false), 1500);
+    });
+  }, [overview]);
 
   const entityKey = useMemo(() => pkSignature(entity), [entity]);
 
@@ -441,10 +519,25 @@ export function EntityPage({ connectionString, entity, onDrill }: EntityPageProp
           {overview.pkColumns.map((c) => `${c}=${formatValue(overview.row?.[c])}`).join(" ")}
         </span>
         {overview.rowError && (
-          <span className="ml-auto flex items-center gap-1 text-xs text-destructive" title={overview.rowError}>
+          <span className="flex items-center gap-1 text-xs text-destructive" title={overview.rowError}>
             <AlertTriangle className="size-3.5" /> row load failed
           </span>
         )}
+        <span className="ml-auto flex items-center gap-1.5">
+          <SqlHintButton
+            title="View the SQL behind this whole page (grouped)"
+            onClick={() => showSql(`${overview.schema}.${overview.table} — all SQL`, buildAllSql(overview))}
+          />
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 gap-1.5 text-xs"
+            onClick={copyAllSql}
+          >
+            {copiedAll ? <Check className="size-3 text-green-500" /> : <ClipboardList className="size-3" />}
+            {copiedAll ? "Copied" : "Copy all SQL"}
+          </Button>
+        </span>
       </div>
 
       {/* Outgoing parent chips */}
@@ -453,24 +546,31 @@ export function EntityPage({ connectionString, entity, onDrill }: EntityPageProp
           {overview.outgoing.map((out, i) => {
             const clickable = out.parentPkValues !== null;
             return (
-              <button
-                key={i}
-                type="button"
-                disabled={!clickable}
-                onClick={() => clickable && onDrill({ schema: out.relation.target.schema, table: out.relation.target.table, pkValues: out.parentPkValues! })}
-                className={cn(
-                  "flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1 text-xs transition-colors",
-                  clickable ? "hover:border-primary/50 hover:bg-accent/40" : "opacity-60",
+              <span key={i} className="flex items-center gap-1">
+                <button
+                  type="button"
+                  disabled={!clickable}
+                  onClick={() => clickable && onDrill({ schema: out.relation.target.schema, table: out.relation.target.table, pkValues: out.parentPkValues! })}
+                  className={cn(
+                    "flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1 text-xs transition-colors",
+                    clickable ? "hover:border-primary/50 hover:bg-accent/40" : "opacity-60",
+                  )}
+                  title={relationName(out.relation)}
+                >
+                  <Link2 className="size-3 text-muted-foreground" />
+                  <span className="text-muted-foreground">{out.relation.source.column} →</span>
+                  <span className="font-medium">{out.relation.target.table}</span>
+                  {out.parentDisplay && <span className="text-primary">{out.parentDisplay}</span>}
+                  {out.error && <span title={out.error} className="inline-flex"><AlertTriangle className="size-3 text-destructive" /></span>}
+                  {out.relation.origin === "virtual" && <span className="text-amber-500 dark:text-amber-400" title="Virtual relation">◇</span>}
+                </button>
+                {out.sql && (
+                  <SqlHintButton
+                    title="View the SQL behind this parent lookup"
+                    onClick={() => showSql(`${out.relation.target.schema}.${out.relation.target.table} (via ${out.relation.source.column})`, `${out.sql};`)}
+                  />
                 )}
-                title={relationName(out.relation)}
-              >
-                <Link2 className="size-3 text-muted-foreground" />
-                <span className="text-muted-foreground">{out.relation.source.column} →</span>
-                <span className="font-medium">{out.relation.target.table}</span>
-                {out.parentDisplay && <span className="text-primary">{out.parentDisplay}</span>}
-                {out.error && <span title={out.error} className="inline-flex"><AlertTriangle className="size-3 text-destructive" /></span>}
-                {out.relation.origin === "virtual" && <span className="text-amber-500 dark:text-amber-400" title="Virtual relation">◇</span>}
-              </button>
+              </span>
             );
           })}
         </div>
@@ -478,8 +578,14 @@ export function EntityPage({ connectionString, entity, onDrill }: EntityPageProp
 
       {/* Fields card */}
       <div className="rounded-lg border border-border bg-card">
-        <div className="border-b border-border px-3 py-2 text-xs font-medium text-muted-foreground">
-          Fields ({overview.columns.length})
+        <div className="flex items-center border-b border-border px-3 py-2 text-xs font-medium text-muted-foreground">
+          <span className="flex-1">Fields ({overview.columns.length})</span>
+          {overview.rowSql && (
+            <SqlHintButton
+              title="View the SQL that fetched this row"
+              onClick={() => showSql(`${overview.schema}.${overview.table} — current row`, `${overview.rowSql};`)}
+            />
+          )}
         </div>
         <div className="grid grid-cols-1 gap-x-6 gap-y-0 p-1 md:grid-cols-2 xl:grid-cols-3">
           {overview.columns.map((col) => (
@@ -532,6 +638,7 @@ export function EntityPage({ connectionString, entity, onDrill }: EntityPageProp
             sectionIndex={i}
             onDrill={onDrill}
             onViewValue={(column, type, value) => setValueDetail({ column, type, value })}
+            onShowSql={showSql}
           />
         ))}
       </div>
@@ -544,6 +651,14 @@ export function EntityPage({ connectionString, entity, onDrill }: EntityPageProp
         title={valueDetail ? `${entity.table}.${valueDetail.column}` : ""}
         type={valueDetail?.type}
         raw={valueDetail?.value}
+      />
+      <ValueDetailDialog
+        open={sqlDetail !== null}
+        onOpenChange={(o) => {
+          if (!o) setSqlDetail(null);
+        }}
+        title={sqlDetail ? `SQL — ${sqlDetail.title}` : ""}
+        raw={sqlDetail?.sql ?? ""}
       />
     </div>
   );

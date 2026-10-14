@@ -1487,6 +1487,8 @@ export type RelatedTableSection = {
   tableEstimate: number | null;
   count: number | null;
   countError: string | null;
+  /** Copy-paste-runnable SQL text (values inlined) for this section */
+  sql?: { count: string; rows: string };
 };
 
 export type ParentReference = {
@@ -1494,6 +1496,8 @@ export type ParentReference = {
   parentPkValues: Record<string, unknown> | null;
   parentDisplay: string | null;
   error: string | null;
+  /** Copy-paste-runnable SQL text (value inlined) used to fetch the parent row */
+  sql?: string;
 };
 
 export type EntityOverview = {
@@ -1505,6 +1509,8 @@ export type EntityOverview = {
   displayColumn: string | null;
   displayValue: string | null;
   rowError: string | null;
+  /** Copy-paste-runnable SQL text (values inlined) used to fetch this row */
+  rowSql?: string;
   incoming: RelatedTableSection[];
   outgoing: ParentReference[];
 };
@@ -1593,7 +1599,7 @@ export function fetchRelatedRows(
   target: { schema: string; table: string; column: string; parentColumn?: string },
   offset: number,
 ) {
-  return request<{ rows: Record<string, unknown>[]; total: number | null; totalError: string | null; columns: Array<{ name: string; type: string | null; isPrimary: boolean }> }>(buildUrl("/api/entity/related-rows"), {
+  return request<{ rows: Record<string, unknown>[]; total: number | null; totalError: string | null; columns: Array<{ name: string; type: string | null; isPrimary: boolean }>; sql?: { rows: string; count: string } }>(buildUrl("/api/entity/related-rows"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ connectionString, schema, table, pkValues, target, offset }),

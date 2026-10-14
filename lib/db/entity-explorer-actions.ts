@@ -30,6 +30,40 @@ const SEARCH_MAX_PER_TABLE = 5;
 const SEARCH_MAX_TOTAL = 100;
 const COUNT_TIMEOUT_MS = 5_000;
 const RELATED_PAGE_SIZE = 100;
+
+/**
+ * Format a value as a self-contained PostgreSQL literal so "copy this SQL"
+ * output can be pasted and executed anywhere. Never used for execution —
+ * real queries stay parameterized (`?` + values).
+ */
+function pgLiteral(value: unknown, type?: string | null): string {
+  if (value === null || value === undefined) return "NULL";
+  if (typeof value === "number") return Number.isFinite(value) ? String(value) : "NULL";
+  if (typeof value === "boolean") return value ? "TRUE" : "FALSE";
+  if (typeof value === "bigint") return value.toString();
+  if (value instanceof Date) return `'${value.toISOString()}'`;
+  if (typeof value === "object" && typeof (value as { toHexString?: unknown }).toHexString === "function") {
+    // pg ObjectId-like objects — fall through to String() below.
+  } else if (typeof value === "object") {
+    if (typeof Uint8Array !== "undefined" && value instanceof Uint8Array) {
+      return `'\\x${Array.from(value).map((b) => b.toString(16).padStart(2, "0")).join("")}'`;
+    }
+    try {
+      return `'${JSON.stringify(value).replace(/'/g, "''")}'`;
+    } catch {
+      return "NULL";
+    }
+  }
+  let s = String(value);
+  const t = String(type || "").toLowerCase();
+  if (/^(bytea|oid|regclass)/.test(t)) {
+    // Best-effort textual rendering for binary-ish types
+    return `'${s.replace(/'/g, "''")}'`;
+  }
+  const needsEscape = /[\\\r\n\t\u0000-\u001f]/.test(s);
+  s = needsEscape ? s.replace(/\\/g, "\\\\").replace(/'/g, "\\'").replace(/\r/g, "\\r").replace(/\n/g, "\\n").replace(/\t/g, "\\t") : s.replace(/'/g, "''");
+  return needsEscape ? `E'${s}'` : `'${s}'`;
+}
 const ILIKE_ROW_ESTIMATE_LIMIT = 2_000_000;
 
 const SENSITIVE_COLUMN_PATTERN = /(password|passwd|secret|token|api_?key|private)/i;
@@ -461,6 +495,8 @@ export type RelatedTableSection = {
   /** exact count when the child table is small enough to count cheaply */
   count: number | null;
   countError: string | null;
+  /** Copy-paste-runnable SQL text (values inlined) for this section */
+  sql: { count: string; rows: string };
 };
 
 export type ParentReference = {
@@ -468,6 +504,8 @@ export type ParentReference = {
   parentPkValues: Record<string, unknown> | null;
   parentDisplay: string | null;
   error: string | null;
+  /** Copy-paste-runnable SQL text (value inlined) used to fetch the parent row */
+  sql: string;
 };
 
 export type EntityOverview = {
@@ -479,6 +517,8 @@ export type EntityOverview = {
   displayColumn: string | null;
   displayValue: string | null;
   rowError: string | null;
+  /** Copy-paste-runnable SQL text (values inlined) used to fetch this row */
+  rowSql: string;
   incoming: RelatedTableSection[];
   outgoing: ParentReference[];
 };
@@ -532,6 +572,15 @@ export async function getEntityOverview(
     const displayColumn = pickDisplayColumn(tableCols);
     const tableRef = `${quotePgIdentifier(schema)}.${quotePgIdentifier(table)}`;
     const sql = `SELECT * FROM ${tableRef} WHERE ${kv.conditions.join(" AND ")} LIMIT 1`;
+    // Copy-runnable version of the row query (PK values inlined)
+    const rowSqlText = `SELECT * FROM ${tableRef} WHERE ${pkCols
+      .map((pk) => {
+        const v = (pkValues || {})[pk.column_name];
+        return v === undefined || v === null
+          ? `${quotePgIdentifier(pk.column_name)} IS NULL`
+          : `${quotePgIdentifier(pk.column_name)} = ${pgLiteral(v, pk.data_type)}`;
+      })
+      .join(" AND ")} LIMIT 1`;
 
     let row: Record<string, unknown> | null = null;
     let rowError: string | null = null;
@@ -561,6 +610,14 @@ export async function getEntityOverview(
         // parent-side column (relation.target.column), e.g. users.id = 1
         // fans out to orders WHERE orders.user_id = 1.
         const parentVal = row ? row[relation.target.column] : undefined;
+        const childTableRefSql = `${quotePgIdentifier(relation.source.schema)}.${quotePgIdentifier(relation.source.table)}`;
+        // Copy-runnable SQL for this section (unexpanded sections get the
+        // same queries that expanding would run — ORDER BY child PK included).
+        const countSqlText = `SELECT count(*)::int AS c FROM ${childTableRefSql} WHERE ${quotePgIdentifier(relation.source.column)} = ${parentVal === undefined || parentVal === null ? "NULL" : pgLiteral(parentVal)}`;
+        const childOrderBy = childPk.length > 0
+          ? `ORDER BY ${childPk.map((c) => quotePgIdentifier(c.column_name)).join(", ")}`
+          : "";
+        const rowsSqlText = `SELECT * FROM ${childTableRefSql} WHERE ${quotePgIdentifier(relation.source.column)} = ${parentVal === undefined || parentVal === null ? "NULL" : pgLiteral(parentVal)}${childOrderBy ? ` ${childOrderBy}` : ""} LIMIT ${RELATED_PAGE_SIZE}`;
         let count: number | null = null;
         let countError: string | null = null;
         const worthExactCount =
@@ -578,16 +635,28 @@ export async function getEntityOverview(
             countError = err instanceof Error ? err.message : String(err);
           }
         }
-        return { relation, tableEstimate: est, count, countError };
+        return { relation, tableEstimate: est, count, countError, sql: { count: countSqlText, rows: rowsSqlText } };
       }),
     );
 
     const outgoing: ParentReference[] = await Promise.all(
       outgoingRelations.map(async (relation) => {
-        if (!row) return { relation, parentPkValues: null, parentDisplay: null, error: null };
+        const parentValEarly = row ? row[relation.source.column] : undefined;
+        const parentSqlTextBase = (cols: string[]) => `SELECT ${cols.join(", ")} FROM ${quotePgIdentifier(relation.target.schema)}.${quotePgIdentifier(relation.target.table)} WHERE ${quotePgIdentifier(relation.target.column)} = ${parentValEarly === null || parentValEarly === undefined ? "NULL" : pgLiteral(parentValEarly)} LIMIT 1`;
+        if (!row) {
+          const parentPkCols0 = getTablePkColumns(columnsCache, relation.target.schema, relation.target.table);
+          const cols0 = Array.from(new Set([
+            ...(parentPkCols0.length > 0 ? parentPkCols0.map((c) => quotePgIdentifier(c.column_name)) : [quotePgIdentifier(relation.target.column)]),
+          ]));
+          return { relation, parentPkValues: null, parentDisplay: null, error: null, sql: parentSqlTextBase(cols0) };
+        }
         const parentVal = row[relation.source.column];
         if (parentVal === null || parentVal === undefined) {
-          return { relation, parentPkValues: null, parentDisplay: null, error: null };
+          const parentPkCols0 = getTablePkColumns(columnsCache, relation.target.schema, relation.target.table);
+          const cols0 = Array.from(new Set([
+            ...(parentPkCols0.length > 0 ? parentPkCols0.map((c) => quotePgIdentifier(c.column_name)) : [quotePgIdentifier(relation.target.column)]),
+          ]));
+          return { relation, parentPkValues: null, parentDisplay: null, error: null, sql: parentSqlTextBase(cols0) };
         }
         try {
           const parentPkCols = getTablePkColumns(columnsCache, relation.target.schema, relation.target.table);
@@ -614,9 +683,14 @@ export async function getEntityOverview(
               ? String(prow[parentDisplayCol])
               : null,
             error: null,
+            sql: parentSqlTextBase(selectParts),
           };
         } catch (err: unknown) {
-          return { relation, parentPkValues: null, parentDisplay: null, error: err instanceof Error ? err.message : String(err) };
+          const parentPkCols1 = getTablePkColumns(columnsCache, relation.target.schema, relation.target.table);
+          const cols1 = Array.from(new Set([
+            ...(parentPkCols1.length > 0 ? parentPkCols1.map((c) => quotePgIdentifier(c.column_name)) : [quotePgIdentifier(relation.target.column)]),
+          ]));
+          return { relation, parentPkValues: null, parentDisplay: null, error: err instanceof Error ? err.message : String(err), sql: parentSqlTextBase(cols1) };
         }
       }),
     );
@@ -637,6 +711,7 @@ export async function getEntityOverview(
         ? String(row[displayColumn])
         : null,
       rowError,
+      rowSql: rowSqlText,
       incoming,
       outgoing,
     };
@@ -656,7 +731,7 @@ export async function getRelatedRows(
   pkValues: Record<string, unknown>,
   target: { schema: string; table: string; column: string; parentColumn: string },
   offset: number,
-): Promise<{ success: boolean; data?: { rows: Record<string, unknown>[]; total: number | null; totalError: string | null; columns: Array<{ name: string; type: string | null; isPrimary: boolean }> }; error?: string }> {
+): Promise<{ success: boolean; data?: { rows: Record<string, unknown>[]; total: number | null; totalError: string | null; columns: Array<{ name: string; type: string | null; isPrimary: boolean }>; sql: { rows: string; count: string } }; error?: string }> {
   try {
     ensureCs(connectionString);
     const columnsCache = await fetchColumnsForRelations(connectionString);
@@ -677,8 +752,9 @@ export async function getRelatedRows(
     );
     const parentVal = entityRow.rows[0]?.v;
     if (parentVal === null || parentVal === undefined) {
-      return { success: true, data: { rows: [], total: 0, totalError: null, columns: [] } };
+      return { success: true, data: { rows: [], total: 0, totalError: null, columns: [], sql: { rows: "", count: "" } } };
     }
+    const parentLiteral = pgLiteral(parentVal);
 
     const childTableRef = `${quotePgIdentifier(target.schema)}.${quotePgIdentifier(target.table)}`;
     const childCols = getTableColumns(columnsCache, target.schema, target.table);
@@ -690,6 +766,9 @@ export async function getRelatedRows(
 
     const rowsSql = `SELECT * FROM ${childTableRef} WHERE ${quotePgIdentifier(target.column)} = ? ${orderBy} LIMIT ${RELATED_PAGE_SIZE} OFFSET ${safeOffset}`;
     const rowsResult = await executeReadOnlyWithTimeout(connectionString, rowsSql, [parentVal], COUNT_TIMEOUT_MS);
+    // Copy-runnable mirrors of the two queries above (value inlined)
+    const rowsSqlText = `SELECT * FROM ${childTableRef} WHERE ${quotePgIdentifier(target.column)} = ${parentLiteral}${orderBy ? ` ${orderBy}` : ""} LIMIT ${RELATED_PAGE_SIZE} OFFSET ${safeOffset}`;
+    const countSqlText = `SELECT count(*)::int AS c FROM ${childTableRef} WHERE ${quotePgIdentifier(target.column)} = ${parentLiteral}`;
 
     let total: number | null = null;
     let totalError: string | null = null;
@@ -708,6 +787,7 @@ export async function getRelatedRows(
         total,
         totalError,
         columns: childCols.map((c) => ({ name: c.column_name, type: c.data_type, isPrimary: Boolean(c.is_primary) })),
+        sql: { rows: rowsSqlText, count: countSqlText },
       },
     };
   } catch (error: unknown) {
