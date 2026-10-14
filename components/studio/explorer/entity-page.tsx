@@ -204,20 +204,20 @@ function buildAllSql(overview: OverviewWithPk): string {
   const out: string[] = [
     `-- RexaDB Entity: ${overview.schema}.${overview.table}${pkDesc ? `  (${pkDesc})` : ""}`,
     "",
-    `-- [本数据] ${overview.schema}.${overview.table}`,
+    `-- [Row] ${overview.schema}.${overview.table}`,
     overview.rowSql || "-- (row query unavailable)",
   ];
   for (const out2 of overview.outgoing) {
     out.push(
       "",
-      `-- [上游] ${out2.relation.target.schema}.${out2.relation.target.table} via ${out2.relation.source.column}`,
+      `-- [Upstream] ${out2.relation.target.schema}.${out2.relation.target.table} via ${out2.relation.source.column}`,
       out2.sql || "-- (parent query unavailable)",
     );
   }
   overview.incoming.forEach((inc, i) => {
     out.push(
       "",
-      `-- [下游 ${i + 1}/${overview.incoming.length}] ${inc.relation.source.schema}.${inc.relation.source.table} via ${inc.relation.source.column}`,
+      `-- [Downstream ${i + 1}/${overview.incoming.length}] ${inc.relation.source.schema}.${inc.relation.source.table} via ${inc.relation.source.column}`,
       inc.sql?.count || "-- (count query unavailable)",
       inc.sql?.rows || "-- (rows query unavailable)",
     );

@@ -573,14 +573,14 @@ export async function getEntityOverview(
     const tableRef = `${quotePgIdentifier(schema)}.${quotePgIdentifier(table)}`;
     const sql = `SELECT * FROM ${tableRef} WHERE ${kv.conditions.join(" AND ")} LIMIT 1`;
     // Copy-runnable version of the row query (PK values inlined)
-    const rowSqlText = `SELECT * FROM ${tableRef} WHERE ${pkCols
+    const rowSqlText = `SELECT *\nFROM ${tableRef}\nWHERE ${pkCols
       .map((pk) => {
         const v = (pkValues || {})[pk.column_name];
         return v === undefined || v === null
           ? `${quotePgIdentifier(pk.column_name)} IS NULL`
           : `${quotePgIdentifier(pk.column_name)} = ${pgLiteral(v, pk.data_type)}`;
       })
-      .join(" AND ")} LIMIT 1`;
+      .join(" AND ")}\nLIMIT 1`;
 
     let row: Record<string, unknown> | null = null;
     let rowError: string | null = null;
@@ -613,11 +613,11 @@ export async function getEntityOverview(
         const childTableRefSql = `${quotePgIdentifier(relation.source.schema)}.${quotePgIdentifier(relation.source.table)}`;
         // Copy-runnable SQL for this section (unexpanded sections get the
         // same queries that expanding would run — ORDER BY child PK included).
-        const countSqlText = `SELECT count(*)::int AS c FROM ${childTableRefSql} WHERE ${quotePgIdentifier(relation.source.column)} = ${parentVal === undefined || parentVal === null ? "NULL" : pgLiteral(parentVal)}`;
+        const countSqlText = `SELECT count(*)::int AS c\nFROM ${childTableRefSql}\nWHERE ${quotePgIdentifier(relation.source.column)} = ${parentVal === undefined || parentVal === null ? "NULL" : pgLiteral(parentVal)}`;
         const childOrderBy = childPk.length > 0
           ? `ORDER BY ${childPk.map((c) => quotePgIdentifier(c.column_name)).join(", ")}`
           : "";
-        const rowsSqlText = `SELECT * FROM ${childTableRefSql} WHERE ${quotePgIdentifier(relation.source.column)} = ${parentVal === undefined || parentVal === null ? "NULL" : pgLiteral(parentVal)}${childOrderBy ? ` ${childOrderBy}` : ""} LIMIT ${RELATED_PAGE_SIZE}`;
+        const rowsSqlText = `SELECT *\nFROM ${childTableRefSql}\nWHERE ${quotePgIdentifier(relation.source.column)} = ${parentVal === undefined || parentVal === null ? "NULL" : pgLiteral(parentVal)}${childOrderBy ? `\n${childOrderBy}` : ""}\nLIMIT ${RELATED_PAGE_SIZE}`;
         let count: number | null = null;
         let countError: string | null = null;
         const worthExactCount =
@@ -642,7 +642,7 @@ export async function getEntityOverview(
     const outgoing: ParentReference[] = await Promise.all(
       outgoingRelations.map(async (relation) => {
         const parentValEarly = row ? row[relation.source.column] : undefined;
-        const parentSqlTextBase = (cols: string[]) => `SELECT ${cols.join(", ")} FROM ${quotePgIdentifier(relation.target.schema)}.${quotePgIdentifier(relation.target.table)} WHERE ${quotePgIdentifier(relation.target.column)} = ${parentValEarly === null || parentValEarly === undefined ? "NULL" : pgLiteral(parentValEarly)} LIMIT 1`;
+        const parentSqlTextBase = (cols: string[]) => `SELECT ${cols.join(", ")}\nFROM ${quotePgIdentifier(relation.target.schema)}.${quotePgIdentifier(relation.target.table)}\nWHERE ${quotePgIdentifier(relation.target.column)} = ${parentValEarly === null || parentValEarly === undefined ? "NULL" : pgLiteral(parentValEarly)}\nLIMIT 1`;
         if (!row) {
           const parentPkCols0 = getTablePkColumns(columnsCache, relation.target.schema, relation.target.table);
           const cols0 = Array.from(new Set([
@@ -767,8 +767,8 @@ export async function getRelatedRows(
     const rowsSql = `SELECT * FROM ${childTableRef} WHERE ${quotePgIdentifier(target.column)} = ? ${orderBy} LIMIT ${RELATED_PAGE_SIZE} OFFSET ${safeOffset}`;
     const rowsResult = await executeReadOnlyWithTimeout(connectionString, rowsSql, [parentVal], COUNT_TIMEOUT_MS);
     // Copy-runnable mirrors of the two queries above (value inlined)
-    const rowsSqlText = `SELECT * FROM ${childTableRef} WHERE ${quotePgIdentifier(target.column)} = ${parentLiteral}${orderBy ? ` ${orderBy}` : ""} LIMIT ${RELATED_PAGE_SIZE} OFFSET ${safeOffset}`;
-    const countSqlText = `SELECT count(*)::int AS c FROM ${childTableRef} WHERE ${quotePgIdentifier(target.column)} = ${parentLiteral}`;
+    const rowsSqlText = `SELECT *\nFROM ${childTableRef}\nWHERE ${quotePgIdentifier(target.column)} = ${parentLiteral}${orderBy ? `\n${orderBy}` : ""}\nLIMIT ${RELATED_PAGE_SIZE} OFFSET ${safeOffset}`;
+    const countSqlText = `SELECT count(*)::int AS c\nFROM ${childTableRef}\nWHERE ${quotePgIdentifier(target.column)} = ${parentLiteral}`;
 
     let total: number | null = null;
     let totalError: string | null = null;
