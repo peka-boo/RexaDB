@@ -301,11 +301,14 @@ function RelatedSection({ connectionString, overview, sectionIndex, onDrill, onV
 
   return (
     <div className="rounded-lg border border-border bg-card">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
+      <div
         className="flex w-full items-center gap-2 px-3 py-2.5 text-left hover:bg-accent/50 transition-colors"
       >
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className="flex min-w-0 flex-1 items-center gap-2 text-left"
+        >
         <ChevronRight className={cn("size-4 shrink-0 text-muted-foreground transition-transform", open && "rotate-90")} />
         <Table2 className="size-4 shrink-0 text-muted-foreground" />
         <span className="font-medium text-sm">{section.relation.source.table}</span>
@@ -315,7 +318,8 @@ function RelatedSection({ connectionString, overview, sectionIndex, onDrill, onV
             <span className="ml-1.5 text-amber-500 dark:text-amber-400" title={`Virtual relation (${section.relation.virtualOrigin})${section.relation.label ? ` — ${section.relation.label}` : ""}`}>◇</span>
           )}
         </span>
-        <span className="ml-auto flex items-center gap-2">
+        </button>
+        <span className="ml-auto flex shrink-0 items-center gap-2">
           {section.countError && <span className="text-[11px] text-destructive" title={section.countError}>count failed</span>}
           <span className={cn("rounded-full px-2 py-0.5 text-xs tabular-nums", isEstimate ? "bg-muted text-muted-foreground" : "bg-primary/10 text-primary")}>
             {countLabel(section.count, isEstimate ? null : section.tableEstimate)}
@@ -326,16 +330,15 @@ function RelatedSection({ connectionString, overview, sectionIndex, onDrill, onV
               title="View the SQL behind this section"
               onClick={() => {
                 const sql = liveSql ?? section.sql;
-                if (!sql) return;
                 onShowSql(
                   `${section.relation.source.schema}.${section.relation.source.table} (via ${section.relation.source.column})`,
-                  `${sql.count};\n\n${sql.rows};`,
+                  sql ? `${sql.count};\n\n${sql.rows};` : "-- SQL unavailable — reconnect or refresh the entity page.",
                 );
               }}
             />
           )}
         </span>
-      </button>
+      </div>
 
       {open && (
         <div className="border-t border-border">
